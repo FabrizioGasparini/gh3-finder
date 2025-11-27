@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Trash2, Edit2, FolderOpen, Copy } from 'lucide-react';
+import { Trash2, Edit2, FolderOpen, Copy, Clipboard } from 'lucide-react';
 
 interface ContextMenuProps {
   x: number;
@@ -9,9 +9,10 @@ interface ContextMenuProps {
   onOpen: () => void;
   onDelete: () => void;
   onRename: () => void;
+  onCopyPath: () => void;
 }
 
-export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, visible, onClose, onOpen, onDelete, onRename }) => {
+export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, visible, onClose, onOpen, onDelete, onRename, onCopyPath }) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,13 +43,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, visible, onClose
         Open
       </button>
       <div className="h-px bg-white/10 my-1" />
+      <button onClick={onCopyPath} className="w-full px-3 py-2 text-left hover:bg-white/10 flex items-center gap-2 transition-colors">
+        <Clipboard className="w-4 h-4 text-white/60" />
+        Copy Path
+      </button>
       <button onClick={onRename} className="w-full px-3 py-2 text-left hover:bg-white/10 flex items-center gap-2 transition-colors">
         <Edit2 className="w-4 h-4 text-white/60" />
         Rename
       </button>
       <button className="w-full px-3 py-2 text-left hover:bg-white/10 flex items-center gap-2 transition-colors opacity-50 cursor-not-allowed">
         <Copy className="w-4 h-4 text-white/60" />
-        Copy
+        Copy File
       </button>
       <div className="h-px bg-white/10 my-1" />
       <button onClick={onDelete} className="w-full px-3 py-2 text-left hover:bg-red-500/20 text-red-400 flex items-center gap-2 transition-colors">

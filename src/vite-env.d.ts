@@ -23,5 +23,7 @@ interface Window {
     removeFavorite(path: string): Promise<any[]>
     onIndexingStatus(callback: (event: any, status: { isIndexing: boolean, message: string }) => void): () => void
     rebuildIndex(): Promise<{ success: boolean; error?: string }>
+    getSettings(): Promise<any>
+    saveSettings(settings: any): Promise<{ success: boolean }>
   }
 }

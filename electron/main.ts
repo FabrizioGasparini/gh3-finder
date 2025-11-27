@@ -234,7 +234,9 @@ function createWindow() {
       win?.webContents.send('indexing-status', { isIndexing: true, message: 'Rescanning...' });
       
       // Start fresh index
-      await indexDirectory(home, 99);
+      const settings = await loadSettings() || {};
+      const depth = settings.maxDepth || 99;
+      await indexDirectory(home, depth);
       
       win?.webContents.send('indexing-status', { isIndexing: false, message: 'Ready' });
       return { success: true };
@@ -244,6 +246,35 @@ function createWindow() {
       return { success: false, error: e.message };
     }
   });
+
+  // Settings
+  ipcMain.handle('get-settings', async () => {
+    return await loadSettings();
+  });
+
+  ipcMain.handle('save-settings', async (_event, settings) => {
+    await saveSettings(settings);
+    return { success: true };
+  });
+}
+
+const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+
+async function loadSettings() {
+  try {
+    const data = await fs.readFile(settingsPath, 'utf-8');
+    return JSON.parse(data);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function saveSettings(settings: any) {
+  try {
+    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
+  } catch (e) {
+    console.error('Failed to save settings:', e);
+  }
 }
 
 // Quit when all windows are closed, except on macOS. There, it's common
@@ -288,6 +319,8 @@ app.whenReady().then(async () => {
 
       // Index home directory on startup
       const home = app.getPath('home');
+      const settings = await loadSettings() || {};
+      const depth = settings.maxDepth || 99;
       
       if (isBackground) {
         console.log('Index already exists. Starting background update...');
@@ -295,11 +328,11 @@ app.whenReady().then(async () => {
         win?.webContents.send('indexing-status', { isIndexing: false, message: 'Checking for changes...' });
         
         // Run indexing in background to pick up changes
-        indexDirectory(home, 99).catch(console.error);
+        indexDirectory(home, depth).catch(console.error);
       } else {
         console.log('First run. Performing initial index...');
         // Perform a complete initial scan (depth 99) and wait for it
-        await indexDirectory(home, 99); 
+        await indexDirectory(home, depth); 
         // Notify UI we are ready
         win?.webContents.send('indexing-status', { isIndexing: false, message: 'Ready' });
       }

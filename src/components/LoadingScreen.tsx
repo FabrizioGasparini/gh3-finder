@@ -31,7 +31,7 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({ message }) => {
         
         <div className="flex flex-col items-center gap-4 text-center">
           <h1 className="text-4xl font-thin text-white tracking-[0.3em] uppercase animate-fade-up drop-shadow-lg">
-            Glass Explorer
+            Gh3sp Finder
           </h1>
           <div className="h-px w-32 bg-gradient-to-r from-transparent via-white/40 to-transparent" />
           <div className="flex flex-col items-center gap-2">

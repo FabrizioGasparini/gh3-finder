@@ -57,4 +57,8 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
 
   // Home Directory
   getHomeDir: () => ipcRenderer.invoke('get-home-dir'),
+
+  // Settings
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  saveSettings: (settings: any) => ipcRenderer.invoke('save-settings', settings),
 })

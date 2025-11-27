@@ -20,6 +20,9 @@ interface AppSettings {
   accentColor: string;
   blurStrength: string;
   bgOpacity: number;
+  maxDepth: number;
+  solidBackground: boolean;
+  doubleClickToOpen: boolean;
 }
 
 function App() {
@@ -28,6 +31,7 @@ function App() {
   const [drives, setDrives] = useState<any[]>([])
   const [favorites, setFavorites] = useState<any[]>([])
   const [isIndexing, setIsIndexing] = useState(true) // Tracks if backend is indexing
+  const [isInitializing, setIsInitializing] = useState(true)
   const [showSplash, setShowSplash] = useState(true) // Tracks if splash screen is visible
   const [indexingMessage, setIndexingMessage] = useState('Initializing...')
   const [isMaximized, setIsMaximized] = useState(false)
@@ -36,7 +40,10 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>({
     accentColor: 'blue',
     blurStrength: 'backdrop-blur-2xl',
-    bgOpacity: 0.4
+    bgOpacity: 0.4,
+    maxDepth: 99,
+    solidBackground: false,
+    doubleClickToOpen: true
   })
   const [showSettings, setShowSettings] = useState(false)
 
@@ -53,6 +60,7 @@ function App() {
   // Tabs State
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTabId, setActiveTabId] = useState('1')
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
   
   const activeTab = tabs.find(t => t.id === activeTabId) || { id: '1', path: '', history: [], historyIndex: 0, files: [], scrollPos: 0 }
 
@@ -75,9 +83,9 @@ function App() {
     console.log('App mounted');
     const init = async () => {
       console.log('Loading drives...');
-      loadDrives()
+      await loadDrives()
       console.log('Loading favorites...');
-      loadFavorites()
+      await loadFavorites()
       
       // Start at home directory instead of C:\ to avoid permission issues
       try {
@@ -87,11 +95,12 @@ function App() {
         setTabs([{ id: '1', path: home, history: [home], historyIndex: 0, files: [], scrollPos: 0 }])
         setActiveTabId('1')
         console.log('Navigating to home...');
-        navigateTo(home, false, '1')
+        await navigateTo(home, false, '1')
       } catch (e) {
         console.error('Failed to get home dir, falling back to C:\\', e)
-        navigateTo('C:\\', false, '1')
+        await navigateTo('C:\\', false, '1')
       }
+      setIsInitializing(false)
     }
     init()
 
@@ -104,14 +113,6 @@ function App() {
     const removeListener = window.ipcRenderer.onIndexingStatus((_event, status) => {
       setIsIndexing(status.isIndexing)
       setIndexingMessage(status.message)
-      
-      // If indexing is done, hide splash
-      if (!status.isIndexing) {
-        // Wait a bit for the user to see "Ready" or similar
-        setTimeout(() => setShowSplash(false), 500)
-      } else {
-        setShowSplash(true)
-      }
     })
 
     return () => {
@@ -119,6 +120,31 @@ function App() {
       removeMaximizeListener()
     }
   }, [])
+
+  useEffect(() => {
+    if (isInitializing || isIndexing) {
+      setShowSplash(true)
+    } else {
+      const timer = setTimeout(() => setShowSplash(false), 500)
+      return () => clearTimeout(timer)
+    }
+  }, [isInitializing, isIndexing])
+
+  useEffect(() => {
+    const load = async () => {
+      const saved = await window.ipcRenderer.getSettings();
+      if (saved) setSettings(s => ({ ...s, ...saved }));
+    };
+    load();
+  }, []);
+
+  useEffect(() => {
+    // Debounce save to avoid excessive writes
+    const timer = setTimeout(() => {
+      window.ipcRenderer.saveSettings(settings);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [settings]);
 
   const loadDrives = async () => {
     try {
@@ -165,7 +191,7 @@ function App() {
 
   // Sorting Logic
   const sortedFiles = useMemo(() => {
-    const files = [...activeTab.files]
+    const files = searchQuery ? [...searchResults] : [...activeTab.files]
     return files.sort((a, b) => {
       // Always keep folders on top
       if (a.isDirectory !== b.isDirectory) {
@@ -192,7 +218,7 @@ function App() {
       }
       return sortOrder === 'asc' ? comparison : -comparison
     })
-  }, [activeTab.files, sortBy, sortOrder])
+  }, [activeTab.files, searchResults, searchQuery, sortBy, sortOrder])
 
   const handleBack = () => {
     if (activeTab.historyIndex > 0) {
@@ -245,11 +271,33 @@ function App() {
     setFavorites(newFavs)
   }
 
-  const handleItemClick = (item: any) => {
-    if (item.isDirectory) {
-      navigateTo(item.path)
+  const handleItemClick = (e: React.MouseEvent, item: any) => {
+    if (settings.doubleClickToOpen) {
+      e.stopPropagation()
+      if (e.ctrlKey) {
+        const newSelected = new Set(selectedFiles)
+        if (newSelected.has(item.path)) newSelected.delete(item.path)
+        else newSelected.add(item.path)
+        setSelectedFiles(newSelected)
+      } else {
+        setSelectedFiles(new Set([item.path]))
+      }
     } else {
-      window.ipcRenderer.openPath(item.path)
+      if (item.isDirectory) {
+        navigateTo(item.path)
+      } else {
+        window.ipcRenderer.openPath(item.path)
+      }
+    }
+  }
+
+  const handleItemDoubleClick = (item: any) => {
+    if (settings.doubleClickToOpen) {
+      if (item.isDirectory) {
+        navigateTo(item.path)
+      } else {
+        window.ipcRenderer.openPath(item.path)
+      }
     }
   }
 
@@ -270,7 +318,11 @@ function App() {
 
   const handleMenuOpen = () => {
     if (contextMenu.item) {
-      handleItemClick(contextMenu.item)
+      if (contextMenu.item.isDirectory) {
+        navigateTo(contextMenu.item.path)
+      } else {
+        window.ipcRenderer.openPath(contextMenu.item.path)
+      }
     }
     handleMenuClose()
   }
@@ -292,6 +344,13 @@ function App() {
         // Refresh current directory
         navigateTo(activeTab.path, false)
       }
+    }
+    handleMenuClose()
+  }
+
+  const handleMenuCopyPath = () => {
+    if (contextMenu.item) {
+      navigator.clipboard.writeText(contextMenu.item.path)
     }
     handleMenuClose()
   }
@@ -321,6 +380,31 @@ function App() {
       await window.ipcRenderer.invoke('move-file', sourcePath, targetPath + '\\' + fileName)
     }
     navigateTo(activeTab.path, false)
+  }
+
+  // Tab Drag and Drop
+  const handleTabDragStart = (e: React.DragEvent, tabId: string) => {
+    e.dataTransfer.setData('tabId', tabId);
+  }
+
+  const handleTabDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  }
+
+  const handleTabDrop = (e: React.DragEvent, targetTabId: string) => {
+    e.preventDefault();
+    const sourceTabId = e.dataTransfer.getData('tabId');
+    if (!sourceTabId || sourceTabId === targetTabId) return;
+
+    const sourceIndex = tabs.findIndex(t => t.id === sourceTabId);
+    const targetIndex = tabs.findIndex(t => t.id === targetTabId);
+    
+    if (sourceIndex === -1 || targetIndex === -1) return;
+
+    const newTabs = [...tabs];
+    const [movedTab] = newTabs.splice(sourceIndex, 1);
+    newTabs.splice(targetIndex, 0, movedTab);
+    setTabs(newTabs);
   }
 
   // Search effect
@@ -404,11 +488,11 @@ function App() {
     <div 
       className={`flex flex-col h-screen text-white overflow-hidden relative shadow-2xl selection:bg-white/20 transition-all duration-200 ${isMaximized ? 'rounded-none border-0' : 'rounded-xl border border-white/10'}`}
       style={{ 
-        backgroundColor: `rgba(0, 0, 0, ${settings.bgOpacity})`,
+        backgroundColor: settings.solidBackground ? '#09090b' : `rgba(0, 0, 0, ${settings.bgOpacity})`,
       }}
     >
       {/* Apply blur class dynamically if it's a tailwind class, otherwise inline style handled above (but tailwind classes are better for blur) */}
-      <div className={`absolute inset-0 -z-10 ${settings.blurStrength} transition-all duration-300`} />
+      <div className={`absolute inset-0 -z-10 ${settings.solidBackground ? '' : settings.blurStrength} transition-all duration-300`} />
 
       {showSplash && <LoadingScreen message={indexingMessage} />}
 
@@ -423,6 +507,10 @@ function App() {
           {tabs.map(tab => (
             <div 
               key={tab.id}
+              draggable
+              onDragStart={(e) => handleTabDragStart(e, tab.id)}
+              onDragOver={handleTabDragOver}
+              onDrop={(e) => handleTabDrop(e, tab.id)}
               onClick={() => setActiveTabId(tab.id)}
               className={`
                 group relative flex items-center gap-2 px-3 py-1.5 rounded-t-lg text-xs cursor-pointer transition-all min-w-[120px] max-w-[200px] border-t border-x border-white/5 no-drag
@@ -467,8 +555,8 @@ function App() {
           <Settings className="w-4 h-4" />
         </button>
 
-        {/* Spacer for Windows Controls (Right side) */}
-        <div className="w-32 h-full" />
+        {/* Native Window Controls Spacer */}
+        <div className="w-[140px] h-full no-drag" />
       </div>
 
       {/* Settings Panel */}
@@ -524,6 +612,53 @@ function App() {
                 value={settings.bgOpacity}
                 onChange={(e) => setSettings({ ...settings, bgOpacity: parseFloat(e.target.value) })}
                 className="w-full accent-white/50"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-white/70 mb-2 flex items-center gap-2">
+                <HardDriveDownload className="w-3 h-3" /> Index Depth
+              </label>
+              <div className="flex items-center gap-2">
+                <input 
+                  type="range" 
+                  min="10" 
+                  max="1000" 
+                  step="10" 
+                  value={settings.maxDepth}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setSettings({ ...settings, maxDepth: val });
+                  }}
+                  className="flex-1 accent-white/50"
+                />
+                <span className="text-xs text-white/50 w-8 text-right">
+                  {settings.maxDepth}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-white/70 flex items-center gap-2">
+                <Palette className="w-3 h-3" /> Solid Background
+              </label>
+              <input 
+                type="checkbox" 
+                checked={settings.solidBackground}
+                onChange={(e) => setSettings({ ...settings, solidBackground: e.target.checked })}
+                className="accent-white/50"
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-white/70 flex items-center gap-2">
+                <Folder className="w-3 h-3" /> Double Click Open
+              </label>
+              <input 
+                type="checkbox" 
+                checked={settings.doubleClickToOpen}
+                onChange={(e) => setSettings({ ...settings, doubleClickToOpen: e.target.checked })}
+                className="accent-white/50"
               />
             </div>
 
@@ -681,37 +816,10 @@ function App() {
             className="flex-1 flex flex-col overflow-hidden bg-gradient-to-br from-white/[0.02] to-transparent"
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e)}
+            onClick={() => setSelectedFiles(new Set())}
           >
              <div className="flex-1 overflow-y-auto p-4">
-                {searchQuery ? (
-                  // Search Results
-                  searchResults.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-1">
-                      {searchResults.map((file, i) => (
-                        <div 
-                          key={i} 
-                          onClick={() => window.ipcRenderer.openPath(file.path)}
-                          className="flex items-center gap-4 p-3 hover:bg-white/5 rounded-xl cursor-pointer transition-all group border border-transparent hover:border-white/5"
-                        >
-                          <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center group-hover:bg-white/10 transition-colors">
-                            <File className="w-5 h-5" style={{ color: getAccentColor() }} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-white/90 truncate">{file.name}</div>
-                            <div className="text-xs text-white/40 truncate">{file.path}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-white/30 gap-4">
-                      <Search className="w-12 h-12 opacity-20" />
-                      <p>No results found</p>
-                    </div>
-                  )
-                ) : (
-                  // File Browser
-                  sortedFiles.length > 0 ? (
+                {sortedFiles.length > 0 ? (
                     <div className={`
                       ${viewMode === 'grid' ? 'grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-4' : ''}
                       ${viewMode === 'list' ? 'flex flex-col gap-1' : ''}
@@ -731,7 +839,8 @@ function App() {
                           key={i} 
                           draggable
                           onDragStart={(e) => handleDragStart(e, file)}
-                          onClick={() => handleItemClick(file)}
+                          onClick={(e) => handleItemClick(e, file)}
+                          onDoubleClick={() => handleItemDoubleClick(file)}
                           onContextMenu={(e) => handleContextMenu(e, file)}
                           onDragOver={(e) => {
                             if (file.isDirectory) {
@@ -754,6 +863,7 @@ function App() {
                           }}
                           className={`
                             group cursor-pointer transition-all border border-transparent
+                            ${selectedFiles.has(file.path) ? 'bg-white/20 ring-1 ring-white/30' : ''}
                             ${viewMode === 'grid' ? 'flex flex-col items-center gap-2 p-3 hover:bg-white/10 rounded-xl hover:border-white/5 hover:shadow-lg text-center' : ''}
                             ${viewMode === 'list' ? 'flex items-center gap-3 p-2 hover:bg-white/5 rounded-lg' : ''}
                             ${viewMode === 'details' ? 'flex items-center gap-4 px-4 py-2 hover:bg-white/5 border-b border-white/[0.02] text-sm' : ''}
@@ -787,18 +897,22 @@ function App() {
                           {viewMode === 'grid' ? (
                             <div className="w-full">
                               <div className="text-xs font-medium text-white/80 truncate px-1">{file.name}</div>
-                              <div className="text-[10px] text-white/30 mt-0.5">
-                                {file.isDirectory ? '' : `${(file.size / 1024).toFixed(0)} KB`}
+                              <div className="text-[10px] text-white/30 mt-0.5 truncate">
+                                {searchQuery ? file.path : (file.isDirectory ? '' : `${(file.size / 1024).toFixed(0)} KB`)}
                               </div>
                             </div>
                           ) : viewMode === 'list' ? (
                             <div className="flex-1 min-w-0">
                                <div className="text-sm text-white/90 truncate">{file.name}</div>
+                               {searchQuery && <div className="text-xs text-white/30 truncate">{file.path}</div>}
                             </div>
                           ) : (
                             // Details View
                             <>
-                              <div className="flex-1 min-w-0 truncate text-white/90">{file.name}</div>
+                              <div className="flex-1 min-w-0 truncate text-white/90">
+                                {file.name}
+                                {searchQuery && <span className="ml-2 text-white/30 text-xs">{file.path}</span>}
+                              </div>
                               <div className="w-32 text-right text-white/40 text-xs">{new Date(file.mtime).toLocaleDateString()}</div>
                               <div className="w-24 text-right text-white/40 text-xs">{file.isDirectory ? 'Folder' : file.name.split('.').pop()?.toUpperCase() || 'FILE'}</div>
                               <div className="w-24 text-right text-white/40 text-xs">{file.isDirectory ? '-' : `${(file.size / 1024).toFixed(0)} KB`}</div>
@@ -809,11 +923,20 @@ function App() {
                     </div>
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-white/30 gap-4">
-                      <Folder className="w-12 h-12 opacity-20" />
-                      <p>Empty folder</p>
+                      {searchQuery ? (
+                        <>
+                          <Search className="w-12 h-12 opacity-20" />
+                          <p>No results found</p>
+                        </>
+                      ) : (
+                        <>
+                          <Folder className="w-12 h-12 opacity-20" />
+                          <p>Empty folder</p>
+                        </>
+                      )}
                     </div>
                   )
-                )}
+                }
              </div>
           </div>
         </div>
@@ -827,6 +950,7 @@ function App() {
         onOpen={handleMenuOpen}
         onDelete={handleMenuDelete}
         onRename={handleMenuRename}
+        onCopyPath={handleMenuCopyPath}
       />
     </div>
   )
